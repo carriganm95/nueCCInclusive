@@ -1,14 +1,18 @@
 #! /bin/bash
 
-sourceDir="/pnfs/icarus/scratch/users/micarrig/nueInclusive/"
+sourceDir="/pnfs/icarus/scratch/users/micarrig/showerEnergyCal/"
 exe="runCaf.sh"
 export fclFile=""
-export tarFile="nueCCInclusive.tar.gz"
+#export tarFile="nueCCInclusive.tar.gz"
+export tarFile="pi0Selection.tar.gz"
 export fileList="mcFiles.list"
-export outputDir="/pnfs/icarus/scratch/users/micarrig/nueInclusive2/"
+#export fileList="matchedRawFiles.list"
+export outputDir="/pnfs/icarus/scratch/users/micarrig/showerEnergyCal/v5/"
 export nEvents=-1
-export anaFile="nuCCInclusive_MC.C"
-nJobs=1 #$(wc -l < ${sourceDir}/${fileList})
+export anaFile="pionSelection.C"
+export nFilesPerJob=100
+nFiles=$(wc -l < ${sourceDir}/${fileList})
+nJobs=$(( nFiles / nFilesPerJob + 1))
 recopy=false
 export treeName="recTree" #if a tree name is passed the input file will be checked to see if the tree has entries
 
@@ -54,8 +58,8 @@ fi
 #not clear to me whether the following two lines are needed
 export BEARER_TOKEN_FILE=/tmp/bt_u$(id -u) && htgettoken -a htvaultprod.fnal.gov -i icarus
 
-echo "Submitting $nJobs jobs to process file list $fileList with fcl file $fclFile"
-echo "Will process $nEvents events per job"
+echo "Submitting $nJobs jobs to process $nFiles files from file list $fileList with fcl file $fclFile"
+echo "Will process $nFilesPerJob files per job"
 echo "Using executable $exe and tar file $tarFile"
 echo "Output will be stored in $outputDir"
 
@@ -78,7 +82,7 @@ if [ -n "$treeName" ]; then
     jobsub_cmd="${jobsub_cmd} -e treeName"
 fi
 
-jobsub_cmd="${jobsub_cmd} -e fileList -e outputDir -e nEvents -f ${sourceDir}/${fileList} file://${exe}"
+jobsub_cmd="${jobsub_cmd} -e fileList -e outputDir -e nEvents -e nFilesPerJob -f ${sourceDir}/${fileList} file://${exe}"
 
 echo "Executing jobsub command:"
 echo "$jobsub_cmd"

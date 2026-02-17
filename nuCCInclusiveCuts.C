@@ -88,6 +88,11 @@ static const ana::Cut& kIsMaxShowerEnergySlice()
 
 namespace ana {
 
+static std::string trackScoreBranch = "trackScore";
+void SetTrackScoreBranch(const std::string& branchName) {
+  trackScoreBranch = branchName;
+}
+
 ////////////////////////////////
 ///////// Helper Functions /////
 ////////////////////////////////
@@ -117,10 +122,10 @@ bool containedTrack(caf::Proxy<caf::SRPFP>& p, float dist=10){
 
 bool containedVertex(const caf::Proxy<caf::SRVector3D>& v, float x_low=10, float x_high=10, float y_low=10, float y_high=10, float z_low=10, float z_high=10){
   // if track endpoint within 10cm of boundaries check chi2
-  if ( isnan(v.x) || isnan(v.y) || isnan(v.z) ) return false; //make sure track endpoints are not Nan
-  if ( !(v.x < -61.94 - x_low && v.x > -358.49 + x_high) && !(v.x > 61.94 + x_high && v.x < 358.49 - x_low) ) return false; // x endpoint contined
-  if ( !(v.y > -181.86 + y_high && v.y < 134.96 - y_low) ) return false; // y endpoint contained
-  if ( !(v.z > -894.951 + z_high && v.z < 894.951 - z_low) ) return false; // z endpoint contained
+  if ( isnan(v.x) || isnan(v.y) || isnan(v.z) ) return false; //make sure vertex points are not Nan
+  if ( !(v.x < -61.94 - x_low && v.x > -358.49 + x_high) && !(v.x > 61.94 + x_high && v.x < 358.49 - x_low) ) return false; // x vertex contined
+  if ( !(v.y > -181.86 + y_high && v.y < 134.96 - y_low) ) return false; // y vertex contained
+  if ( !(v.z > -894.951 + z_high && v.z < 894.951 - z_low) ) return false; // z vertex contained
   return true;
 }
 
@@ -144,12 +149,22 @@ bool containedShower(caf::Proxy<caf::SRPFP>& p){
   return (startx && endx && starty && endy && startz && endz);
 }
 
-bool IsTracklikeTrack( caf::Proxy<caf::SRPFP>& p ) {
-  return (!std::isnan(p.trackScore) && p.trackScore > 0.45);
+bool IsTracklikeTrack( caf::Proxy<caf::SRPFP>& p, int id = -1) {
+  double score = -1;
+  if (trackScoreBranch == "trackScore") {
+    return (!std::isnan(p.trackScore) && p.trackScore > 0.45);
+  }
+  else if (trackScoreBranch == "ngscore") {
+    return (!std::isnan(p.ngscore.sem_cat) && p.ngscore.sem_cat == id);
+  }
+  else {
+    std::cerr << "Unknown track score branch: " << trackScoreBranch << std::endl;
+    return false; // or throw an exception
+  }
 }
 
 bool checkMuon(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc){
-  if ( !IsTracklikeTrack(p) ) return false; //make sure track score is good
+  if ( !IsTracklikeTrack(p, 0) ) return false; //make sure track score is good
   if ( std::isnan(p.trk.start.x) || std::isnan(p.trk.len) || p.trk.len <= 0. ) return false; //track start and len must be valid
   if ( trkDistance(p, slc) >= 10 ) return false; // dist(track, vertex) < 10 cm
   if ( !p.parent_is_primary ) return false; // must be a primary particle
@@ -159,7 +174,7 @@ bool checkMuon(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc){
 }
 
 bool checkProton(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc){
-  if ( !IsTracklikeTrack(p) ) return false; //make sure track score is good
+  if ( !IsTracklikeTrack(p, 1) ) return false; //make sure track score is good
   if ( std::isnan(p.trk.start.x) || std::isnan(p.trk.len) || p.trk.len <= 0. ) return false; //track start and len must be valid
   if ( trkDistance(p, slc) > 10 ) return false; // dist(track, vertex) < 10 cm
   if ( !p.parent_is_primary ) return false; // must be a primary particle
@@ -179,11 +194,25 @@ bool checkChargedPion(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc){
   return true;
 }
 
-bool checkShower(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc){
-  if ( std::isnan(p.trackScore) || p.trackScore < 0 || p.trackScore > 0.45) return false;
-  if ( std::isnan(p.shw.plane[2].energy) || p.shw.plane[2].energy < 0 ) return false;
+bool checkShower(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc, int plane){
+  if ( trackScoreBranch == "trackScore"){
+    if ( std::isnan(p.trackScore) || p.trackScore < 0 || p.trackScore > 0.45) return false;
+  }
+  else if ( trackScoreBranch == "ngscore"){
+    if ( std::isnan(p.ngscore.sem_cat) || p.ngscore.sem_cat != 2 ) return false;
+  }
+  else {
+    std::cerr << "Unknown track score branch: " << trackScoreBranch << std::endl;
+    return false;
+  }
+  if ( std::isnan(p.shw.plane[plane].energy) || p.shw.plane[plane].energy < 0 ) return false;
   if ( !p.parent_is_primary ) return false;
   return true;
+}
+
+// Non-default overload to avoid ambiguity when calling with two arguments
+bool checkShower(caf::Proxy<caf::SRPFP>& p, const caf::SRSliceProxy* slc){
+  return checkShower(p, slc, 2);
 }
 
 bool checkEle(caf::Proxy<caf::SRPFP>& s, const caf::SRSliceProxy* slc, int Nm1 = -1){
@@ -378,10 +407,82 @@ const Var kTruth_NeutrinoE([](const caf::SRSliceProxy *slc) -> double {
   return ( kHasTruthMatch(slc) ? (float)slc->truth.E : -5.f );
 });
 
-const MultiVar kShowerE([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+const MultiVar kShowerE0([](const caf::SRSliceProxy *slc) -> std::vector<double> {
   std::vector<double> e = {};
   for (auto& s : slc->reco.pfp){
-    if ( checkShower(s, slc) && double(s.shw.plane[2].energy > 0.02) ) e.push_back(double(s.shw.plane[2].energy));
+    if ( checkShower(s, slc, 0) && double(s.shw.plane[0].energy > 0.02) ) e.push_back(double(s.shw.plane[0].energy));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar kShowerE1([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 1) && double(s.shw.plane[1].energy > 0.02) ) e.push_back(double(s.shw.plane[1].energy));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar kShowerE2([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 2) && double(s.shw.plane[2].energy > 0.02) ) e.push_back(double(s.shw.plane[2].energy));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar tShowerE_E0([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 0) && double(s.shw.plane[0].energy > 0.02) ) e.push_back(double(s.shw.truth.p.plane[0][0].visE));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar tShowerE_E1([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 1) && double(s.shw.plane[1].energy > 0.02) ) e.push_back(double(s.shw.truth.p.plane[0][1].visE));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar tShowerE_E2([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 2) && double(s.shw.plane[2].energy > 0.02) ) e.push_back(double(s.shw.truth.p.plane[0][2].visE));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar tShowerE_W0([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 0) && double(s.shw.plane[0].energy > 0.02) ) e.push_back(double(s.shw.truth.p.plane[1][0].visE));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar tShowerE_W1([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 1) && double(s.shw.plane[1].energy > 0.02) ) e.push_back(double(s.shw.truth.p.plane[1][1].visE));
+  }
+  if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
+  return e;
+});
+
+const MultiVar tShowerE_W2([](const caf::SRSliceProxy *slc) -> std::vector<double> {
+  std::vector<double> e = {};
+  for (auto& s : slc->reco.pfp){
+    if ( checkShower(s, slc, 2) && double(s.shw.plane[2].energy > 0.02) ) e.push_back(double(s.shw.truth.p.plane[1][2].visE));
   }
   if (e.size() == 0) e.push_back(-5.f); // need this or else Tree will break from non-equal entries
   return e;
@@ -429,27 +530,22 @@ const Var kShowerInvariantMass([](const caf::SRSliceProxy *slc) -> double {
 
   float e1 = slc->reco.pfp.at(primary).shw.plane[2].energy;
   float e2 = slc->reco.pfp.at(second).shw.plane[2].energy;
-  //float e1 = slc->reco.pfp.at(primary).shw.bestplane_energy;
-  //float e2 = slc->reco.pfp.at(second).shw.bestplane_energy;
-  
+  //float e1 = slc->reco.pfp.at(primary).shw.truth.bestmatch.energy;
+  //float e2 = slc->reco.pfp.at(second).shw.truth.bestmatch.energy;
+  // optionally correct energy using fit function
+  /*TF1* f = new TF1("f", "[0]*(TMath::Erf((x-[1])/([2]*sqrt(2))) - TMath::Erf((- [1])/([2]*sqrt(2))))/(1 - TMath::Erf((- [1])/([2]*sqrt(2))))", 0, 10);
+  f->SetParameters(1.27596, 0.169703, 0.356733);
+  e1 = f->Eval(e1);
+  e2 = f->Eval(e2);*/
+
   auto& trk1 = slc->reco.pfp.at(primary).shw;
   auto& trk2 =  slc->reco.pfp.at(second).shw;
-	
-  /*TVector3 dir1( trk1.dir.x, trk1.dir.y, trk1.dir.z );
-  TVector3 dir2( trk2.dir.x, trk2.dir.y, trk2.dir.z );
-	auto dir = dir1.Unit();
-	double thGamma = dir.Angle(dir2);
-	auto cosTh = TMath::Cos(thGamma);*/
-
-  /*TVector3 dir1( trk1.dir.x, trk1.dir.y, trk1.dir.z );
-  TVector3 dir2( trk2.dir.x, trk2.dir.y, trk2.dir.z );
-	auto dir = dir1.Unit();
-	double thGamma = dir.Angle(dir2);
-	auto cosTh = TMath::Cos(thGamma);*/
 
   TVector3 vertex( slc->vertex.x, slc->vertex.y, slc->vertex.z );
   TVector3 start1( trk1.start.x, trk1.start.y, trk1.start.z );
   TVector3 start2( trk2.start.x, trk2.start.y, trk2.start.z );
+  // TVector3 start1( trk1.truth.p.start.x, trk1.truth.p.start.y, trk1.truth.p.start.z );
+  // TVector3 start2( trk2.truth.p.start.x, trk2.truth.p.start.y, trk2.truth.p.start.z );
   start1 = start1 - vertex;
   start2 = start2 - vertex;
 	auto start = start1.Unit();
@@ -487,8 +583,16 @@ const Var kLeadingShowerOpenAngle([](const caf::SRSliceProxy* slc) -> double {
 const Var kLeadingShowerCosAngle([](const caf::SRSliceProxy* slc) -> double {
   int id = kLargestShowerId(slc);  
   if ( id < 0 ) return -5.f;
-  double cosAngle = TMath::Cos(slc->reco.pfp.at(id).shw.open_angle);
-  return ( id >= 0 ? cosAngle : -5.f );
+  //double cosAngle = TMath::Cos(slc->reco.pfp.at(id).shw.open_angle);
+  const auto& shwStart = slc->reco.pfp.at(id).shw.start;
+  if (std::isnan(shwStart.x) || std::isinf(shwStart.x)) return -5.f;
+  if (std::isnan(shwStart.y) || std::isinf(shwStart.y)) return -5.f;
+  if (std::isnan(shwStart.z) || std::isinf(shwStart.z)) return -5.f;
+  TVector3 showerPos = TVector3(shwStart.x, shwStart.y, shwStart.z);
+  TVector3 zAxis = TVector3(0, 0, 1);
+	double angle = zAxis.Angle(showerPos.Unit());
+  double theta = TMath::Cos(angle);
+  return ( id >= 0 ? theta : -5.f );
 });
 
 const Var kLeadingShowerEleP([](const caf::SRSliceProxy* slc) -> double { 
@@ -592,6 +696,14 @@ const TruthVar kTGood1Mu1Pi0([](const caf::SRTrueInteractionProxy* nu) -> bool {
   return false;
 });
 
+const TruthVar kTnNue([](const caf::SRTrueInteractionProxy* nu) -> int {
+  return std::isnan(nu->pdg) ? -5 : std::abs(nu->pdg) == 12;
+});
+
+const TruthVar kTnNumu([](const caf::SRTrueInteractionProxy* nu) -> int {
+  return std::isnan(nu->pdg) ? -5 : std::abs(nu->pdg) == 14;
+});
+
 const Var kBaryDeltaZT([](const caf::SRSliceProxy* slc) -> double {
   return slc->barycenterFM.deltaZ_Trigger;
 });
@@ -608,6 +720,22 @@ const Var kRFiducial([](const caf::SRSliceProxy* slc) -> bool {
 // vertex must be contined in detector
 const Var kTFiducial([](const caf::SRSliceProxy* slc) -> bool {
   return containedVertex(slc->truth.position, 25, 25, 25, 25, 50, 30);
+});
+
+const Var tGoodNue([](const caf::SRSliceProxy* slc) -> bool {
+  if (slc->truth.index < 0) return false; // no truth match
+  const auto& nu = slc->truth;
+  if (std::isnan(nu.position.x) || std::isnan(nu.position.y) || std::isnan(nu.position.z)) return false; // check for nans
+
+  bool isFV = false;
+  if ( !std::isnan(nu.position.x) && !std::isnan(nu.position.y) && !std::isnan(nu.position.z) ) {
+      isFV = (( ( nu.position.x < -61.94 - 25 && nu.position.x > -358.49 + 25 ) ||
+                ( nu.position.x >  61.94 + 25 && nu.position.x <  358.49 - 25 )) &&
+              ( ( nu.position.y > -181.86 + 25 && nu.position.y < 134.96 - 25 ) &&
+                ( nu.position.z > -894.95 + 30 && nu.position.z < 894.95 - 50 ) ));
+  }
+  if (std::abs(nu.initpdg) == 12 && isFV && !(nu.isnc)) return true;
+  return false;
 });
 
 // shower contained 5cm from detector edges
@@ -828,6 +956,14 @@ const Var kCVNCosmicScore([](const caf::SRSliceProxy* slc) -> double {
   return ( !std::isnan(slc->cvn.cosmicscore) ? (float)slc->cvn.cosmicscore : -9999.f );
 });
 
+const Var rClearCosmic([](const caf::SRSliceProxy* slc) -> bool {
+  return slc->is_clear_cosmic;
+});
+
+const Var rLargestShowerCut([](const caf::SRSliceProxy* slc) -> bool {
+  return ( kLargestShowerId(slc) >= 0 );
+});
+
 ////////////////////////
 ///////// Cuts /////////
 ////////////////////////
@@ -1043,6 +1179,11 @@ const Cut kShowerDensity([](const caf::SRSliceProxy* slc) {
   return ( id >= 0 ? slc->reco.pfp.at(id).shw.density > 4.5 : false);
 });
 
+//cut on slice matched to a true neutrino interaction
+const Cut kSliceNeutrinoMatched([](const caf::SRSliceProxy* slc) {
+  return (slc->truth.index >= 0);
+});
+
 // 1mu1pi0X selections
 
 bool t1Mu1Pi0(const caf::SRSliceProxy* slc, bool signal){
@@ -1117,12 +1258,12 @@ const Cut goodPhotonCandidates([](const caf::SRSliceProxy* slc) {
 
 const Cut primaryPhotonEnergyCut([](const caf::SRSliceProxy* slc) { 
   int id = kLargestShowerId(slc);
-  return (id >= 0 ? slc->reco.pfp.at(id).shw.plane[2].energy > 0.04 : false);
+  return (id >= 0 ? slc->reco.pfp.at(id).shw.plane[2].energy > 0.03 : false);
 });
 
 const Cut secondaryPhotonEnergyCut([](const caf::SRSliceProxy* slc) { 
   int id = kSecondLargestShowerId(slc);
-  return (id >= 0 ? slc->reco.pfp.at(id).shw.plane[2].energy > 0.025 : false);
+  return (id >= 0 ? slc->reco.pfp.at(id).shw.plane[2].energy > 0.03 : false);
 });
 
 const Cut nShowersCut([](const caf::SRSliceProxy* slc) { 
@@ -1130,7 +1271,26 @@ const Cut nShowersCut([](const caf::SRSliceProxy* slc) {
   for (auto& p : slc->reco.pfp){
     if ( checkShower(p, slc) ) nShowers++;
   }
-  return (nShowers >= 2 && nShowers <= 3);
+  //return (nShowers >= 2 && nShowers <= 3);
+  return nShowers == 2;
+});
+
+const Cut openAngle([](const caf::SRSliceProxy* slc) { 
+  int primary = kLargestShowerId(slc);
+  int secondary = kSecondLargestShowerId(slc);
+  if (primary < 0 || secondary < 0) return false;
+
+  const auto& trk1 = slc->reco.pfp.at(primary).shw;
+  const auto& trk2 = slc->reco.pfp.at(secondary).shw;
+
+  TVector3 vertex( slc->vertex.x, slc->vertex.y, slc->vertex.z );
+  TVector3 start1( trk1.start.x, trk1.start.y, trk1.start.z );
+  TVector3 start2( trk2.start.x, trk2.start.y, trk2.start.z );
+  start1 = start1 - vertex;
+  start2 = start2 - vertex;
+	auto start = start1.Unit();
+	double thGamma = start.Angle(start2.Unit());
+  return (thGamma > 0.35); //radians, corresponds to ~20 degrees (from microboone)
 });
 
 const Cut chargedPionVeto([](const caf::SRSliceProxy* slc) { 
@@ -1168,31 +1328,37 @@ const Cut kWestCryoCut([](const caf::SRSliceProxy* slc) {
 
 const Cut kIsTrueElectron([](const caf::SRSliceProxy* slc) {
   int id = kLargestShowerId(slc);
+  if (id < 0) return false;
   return ( std::abs(slc->reco.pfp.at(id).shw.truth.p.pdg) == 11 );
 });
 
 const Cut kIsTrueMuon([](const caf::SRSliceProxy* slc) {
   int id = kLargestShowerId(slc);
+  if (id < 0) return false;
   return ( std::abs(slc->reco.pfp.at(id).shw.truth.p.pdg) == 13 );
 });
 
 const Cut kIsTruePhoton([](const caf::SRSliceProxy* slc) {
   int id = kLargestShowerId(slc);
+  if (id < 0) return false;
   return ( std::abs(slc->reco.pfp.at(id).shw.truth.p.pdg) == 22 );
 });
 
 const Cut kIsTrueProton([](const caf::SRSliceProxy* slc) {
   int id = kLargestShowerId(slc);
+  if (id < 0) return false;
   return ( std::abs(slc->reco.pfp.at(id).shw.truth.p.pdg) == 2212 );
 });
 
 const Cut kIsTrueNeutralPion([](const caf::SRSliceProxy* slc) {
   int id = kLargestShowerId(slc);
+  if (id < 0) return false;
   return ( slc->reco.pfp.at(id).shw.truth.p.pdg == 111 );
 });
 
 const Cut kIsTrueChargedPion([](const caf::SRSliceProxy* slc) {
   int id = kLargestShowerId(slc);
+  if (id < 0) return false;
   return ( std::abs(slc->reco.pfp.at(id).shw.truth.p.pdg) == 211 );
 });
 

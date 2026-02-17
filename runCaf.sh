@@ -81,27 +81,32 @@ if [[ ! -s ${CONDOR_DIR_INPUT}/${fileList} ]]; then
     cleanup_and_exit 20
 fi
 
-# Read the specific line from inputFile.list
-line=$(sed -n "$((JOBSUBJOBSECTION + 1))p" "${CONDOR_DIR_INPUT}/${fileList}")
-echo "Read line: $line"
+# # Read the specific line from inputFile.list
+# line=$(sed -n "$((JOBSUBJOBSECTION + 1))p" "${CONDOR_DIR_INPUT}/${fileList}")
+# echo "Read line: $line"
 
-# Check if line contains both a number and filename (space-separated)
-if [[ $line =~ ^[0-9]+[[:space:]]+(.+)$ ]]; then
-    # Extract number and filename
-    jobNum=$(echo "$line" | awk '{print $1}')
-    runFile=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^ *//')
-    echo "Found number and file: jobNum=$jobNum, runFile=$runFile"
-else
-    # Treat entire line as filename
-    runFile="$line"
-    echo "Selected file: $runFile"
-fi
+# # Check if line contains both a number and filename (space-separated)
+# if [[ $line =~ ^[0-9]+[[:space:]]+(.+)$ ]]; then
+#     # Extract number and filename
+#     jobNum=$(echo "$line" | awk '{print $1}')
+#     runFile=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^ *//')
+#     echo "Found number and file: jobNum=$jobNum, runFile=$runFile"
+# else
+#     # Treat entire line as filename
+#     runFile="$line"
+#     echo "Selected file: $runFile"
+# fi
 
-# Check if file was found
-if [ -z "$runFile" ]; then
-    echo "ERROR: No file found at line $jobid in $fileList"
-    cleanup_and_exit 21
-fi
+# # Check if file was found
+# if [ -z "$runFile" ]; then
+#     echo "ERROR: No file found at line $jobid in $fileList"
+#     cleanup_and_exit 21
+# fi
+
+# Get the lines that correspond to this job number
+startFile=$((jobNum * nFilesPerJob ))
+endFile=$((startFile + nFilesPerJob - 1 ))
+echo "Processing files from line $startFile to $endFile in $fileList"
 
 echo "the job number is: $jobNum" 
 outputFile="output_${jobNum}.root"
@@ -167,35 +172,35 @@ ls -alh "${work_dir}"
 
 
 #check that input file is valid and has events if a tree name is provided
-if [ -n "$treeName" ]; then
-    if ! root -l -n -b -q -e \
-        "TFile* f = TFile::Open(\"${runFile}\"); \
-        if (!f || f->IsZombie()) { \
-            std::cout << \"ERROR: Cannot open file ${runFile}\" << std::endl; \
-            gSystem->Exit(1); \
-        } \
-        TTree* tree = (TTree*)f->Get(\"${treeName}\"); \
-        if (!tree) { \
-            std::cout << \"ERROR: Tree ${treeName} not found in ${runFile}\" << std::endl; \
-            f->Close(); \
-            gSystem->Exit(1); \
-        } \
-        Long64_t entries = tree->GetEntries(); \
-        std::cout << \"File ${runFile} has \" << entries << \" entries\" << std::endl; \
-        if (entries == 0) { \
-            std::cout << \"ERROR: File ${runFile} has no events\" << std::endl; \
-            f->Close(); \
-            gSystem->Exit(1); \
-        } \
-        f->Close(); \
-        gSystem->Exit(0);"; then
-        echo "ERROR: File $runFile is empty or invalid" >&2
-        cleanup_and_exit 35
-    fi
-fi
+# if [ -n "$treeName" ]; then
+#     if ! root -l -n -b -q -e \
+#         "TFile* f = TFile::Open(\"${runFile}\"); \
+#         if (!f || f->IsZombie()) { \
+#             std::cout << \"ERROR: Cannot open file ${runFile}\" << std::endl; \
+#             gSystem->Exit(1); \
+#         } \
+#         TTree* tree = (TTree*)f->Get(\"${treeName}\"); \
+#         if (!tree) { \
+#             std::cout << \"ERROR: Tree ${treeName} not found in ${runFile}\" << std::endl; \
+#             f->Close(); \
+#             gSystem->Exit(1); \
+#         } \
+#         Long64_t entries = tree->GetEntries(); \
+#         std::cout << \"File ${runFile} has \" << entries << \" entries\" << std::endl; \
+#         if (entries == 0) { \
+#             std::cout << \"ERROR: File ${runFile} has no events\" << std::endl; \
+#             f->Close(); \
+#             gSystem->Exit(1); \
+#         } \
+#         f->Close(); \
+#         gSystem->Exit(0);"; then
+#         echo "ERROR: File $runFile is empty or invalid" >&2
+#         cleanup_and_exit 35
+#     fi
+# fi
 
 echo "Running ${macro_file} on file ${runFile}"
-root_macro_call=".x ${macro_file}++(false, \"${runFile}\", \"${outputFile}\")"
+root_macro_call=".x ${macro_file}++(false, \"${CONDOR_DIR_INPUT}/${fileList}\", \"${outputFile}\" , ${startFile}, ${endFile})"
 
 pushd "${work_dir}" >/dev/null
 echo "Executing: root -l -n -b -q ${SBNANA_FQ_DIR}/bin/load_cafana_libs.C -e \"gInterpreter->AddIncludePath(\\\"${INPUT_TAR_DIR_LOCAL}\\\")\" -e \"gInterpreter->AddIncludePath(\\\"${CONDOR_DIR_INPUT}\\\")\" -e \"${root_macro_call}\""

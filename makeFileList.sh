@@ -2,10 +2,14 @@
 
 htgettoken -a htvaultprod.fnal.gov -i icarus
 
-definition="micarrig_shower_dEdx_cal_reco1_to_caf_shower_dEdx_cal"
+#definition="micarrig_shower_dEdx_cal_reco1_to_caf_shower_dEdx_cal"
 #definition="Icaruspro_2025_Run2_production_Run2reprocess_v09_89_01_02p02_offbeamnumimajority_flatcaf_prescaled" #cosmic data
-localPath="/pnfs/sbn/data/sbn_fd/poms_production/2025A_icarus_NuMI_MC/FHC_NuMI/mc/reconstructed/icaruscode_v09_89_01_02p02/flatcaf/*/*/*.flat.caf*.root" #mc data
-outputList="mcFiles.list"
+#definition="Icaruspro_2025_Run2_production_Run2reprocess_v09_89_01_02p02_numimajority_flatcaf_unblind" #Full run 2 NUMI data
+#localPath="/pnfs/sbn/data/sbn_fd/poms_production/2025A_icarus_NuMI_MC/FHC_NuMI/mc/reconstructed/icaruscode_v09_89_01_02p02/flatcaf/*/*/*.flat.caf*.root" #mc data
+#localPath="/pnfs/icarus/scratch/users/micarrig/showerEnergyCalCafMC/outputs/*/*.flat.caf*.root" #numi run 2 nu graph MC
+#localPath="/pnfs/icarus/persistent/users/dcarber/spine/combined_files/NuMI_CV_flat_cafs_2/*.root" #spine caf files
+localPath="/pnfs/icarus/scratch/users/micarrig/cvnOutput/v2/outputs/*/*flat.caf*.root" #cvn score files
+outputList="numiRun2CVNMC.list"
 treeName="recTree"
 checkFile=false
 debug=false
@@ -158,7 +162,7 @@ process_files_sam() {
     fi
 
     for f in $files; do
-        if [ $counter -ge 10 ]; then
+        if $debug && [ $counter -ge 10 ]; then
             break
         fi
 
@@ -179,8 +183,10 @@ process_files_sam() {
             continue
         fi
 
-        if ! checkRootFile "$full_uri" "$treeName"; then
-            continue
+        if [ $checkFile = true ]; then
+            if ! checkRootFile "$full_uri" "$treeName"; then
+                continue
+            fi
         fi
 
         if $debug; then

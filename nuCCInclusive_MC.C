@@ -20,24 +20,77 @@
 
 using namespace ana;
 
-void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string outputFile="debug.root"){
+void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string outputFile="debug.root", int start=-1, int stop=-1){
 
-  std::cout << "jobId: " << jobId << " , " << std::endl;
+  std::cout << "jobId: " << jobId << " , start: " << start << ", stop: " << stop << std::endl;
   TString fphase2 = "/pnfs/sbn/data/sbn_fd/poms_production/2025A_icarus_NuMI_MC/FHC_NuMI/mc/reconstructed/icaruscode_v09_89_01_02p02/flatcaf/00/*/*.flat.caf*.root";
   if ( debug ) fphase2 = "/pnfs/sbn/data/sbn_fd/poms_production/2025A_icarus_NuMI_MC/FHC_NuMI/mc/reconstructed/icaruscode_v09_89_01_02p02/flatcaf/05/04/detsim_2d_icarus_refactored_detsim_stage0_stage1_79315342_0.flat.caf-0985b172-de17-487e-8183-915eed082119.root";
   else if (jobId != "") fphase2 = jobId;
 
   std::cout << "Using input: " << fphase2 << std::endl;
 
+  // option to use CVN scores
   bool useCVN = false;
+  
+  // option to use nugraph scores
+  bool useNuGraph = false;
+
+  if (useNuGraph){
+    SetTrackScoreBranch("ngscore");
+    std::cout << "Using track score branch: " << trackScoreBranch << std::endl;
+  }
 
   std::string inputStr = fphase2.Data();
-  bool hasWildcards = (inputStr.find("?") != std::string::npos || 
-                      inputStr.find("*") != std::string::npos);
 
-  SpectrumLoader loader = hasWildcards 
-    ? SpectrumLoader(inputStr)
-    : SpectrumLoader(std::vector<std::string>{inputStr});
+  // Check if input is a file list (.txt or .list)
+  bool isFileList = (inputStr.size() > 4 && 
+                    (inputStr.substr(inputStr.size()-4) == ".txt" || 
+                      inputStr.substr(inputStr.size()-5) == ".list"));
+
+  SpectrumLoader loader = [&]() {
+    if (isFileList) {
+      // Read file list and build vector of files
+      std::vector<std::string> allFiles;
+      std::ifstream inFile(inputStr);
+      if (!inFile.is_open()) {
+        std::cerr << "Error: Could not open file list: " << inputStr << std::endl;
+        exit(1);
+      }
+      std::string line;
+      while (std::getline(inFile, line)) {
+        // Skip empty lines and comments
+        if (!line.empty() && line[0] != '#') {
+          allFiles.push_back(line);
+        }
+      }
+      inFile.close();
+      
+      // Extract subset based on start/stop indices
+      std::vector<std::string> fileList;
+      int startIdx = (start >= 0) ? start : 0;
+      int stopIdx = (stop > 0) ? stop : allFiles.size();
+      
+      // Validate indices
+      if (startIdx >= (int)allFiles.size()) {
+        std::cerr << "Error: start index " << startIdx << " exceeds file list size " << allFiles.size() << std::endl;
+        exit(1);
+      }
+      stopIdx = std::min(stopIdx, (int)allFiles.size());
+      
+      fileList.assign(allFiles.begin() + startIdx, allFiles.begin() + stopIdx);
+      std::cout << "Loaded " << fileList.size() << " files (indices " << startIdx 
+                << " to " << stopIdx << ") from list: " << inputStr << std::endl;
+      return SpectrumLoader(fileList);
+    }
+    else {
+      // Check for wildcards
+      bool hasWildcards = (inputStr.find("?") != std::string::npos || 
+                          inputStr.find("*") != std::string::npos);
+      return hasWildcards 
+        ? SpectrumLoader(inputStr)
+        : SpectrumLoader(std::vector<std::string>{inputStr});
+    }
+  }();
 
   
   double POT = 3.0E20; //BNB 6.6 NuMI 6
@@ -52,8 +105,8 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   std::vector<std::string> finalCutNames;
 
   // Add fiducial and barycenter cuts to all cutflows
-  finalCuts.insert(finalCuts.end(), {totalCut, kRFiducialCut, kBarycenterCuts}); 
-  finalCutNames.insert(finalCutNames.end(), {"NoCut", "Fiducial", "Barycenter"});
+  finalCuts.insert(finalCuts.end(), {totalCut, kLargestShowerCut, kNotClearCosmic, kRFiducialCut, kBarycenterCuts}); 
+  finalCutNames.insert(finalCutNames.end(), {"NoCut", "Shower", "ClearCosmic", "Fiducial", "Barycenter"});
 
   // if using CVN cut
   if ( useCVN ) {
@@ -70,8 +123,8 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   //finalCutNames.push_back("ShowerEnergy");
 
   // shower quality cuts
-  //finalCuts.insert(finalCuts.end(), {kShowerDedx, kShowerConversionGap, kShowerDensity});
-  //finalCutNames.insert(finalCutNames.end(), {"ShowerDedx", "ShowerConversionGap", "ShowerDensity}");
+  finalCuts.insert(finalCuts.end(), {kShowerDedx, kShowerConversionGap, kShowerDensity});
+  finalCutNames.insert(finalCutNames.end(), {"ShowerDedx", "ShowerConversionGap", "ShowerDensity"});
 
   std::vector<Cut> eShowerCuts = finalCuts;
   std::vector<std::string> cutNames = finalCutNames;
@@ -86,8 +139,10 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   // Add the max shower energy slice cut to the beginning of the cuts for efficiency calculations to ensure only one slice per spill is considered
   auto eShowerCutEff = eShowerCuts;
   auto cutNamesEff = cutNames;
-  eShowerCutEff.insert(eShowerCutEff.begin(), kIsMaxShowerEnergySlice());
-  cutNamesEff.insert(cutNamesEff.begin(), "MaxShowerEnergySlice");
+  // eShowerCutEff.insert(eShowerCutEff.begin(), kIsMaxShowerEnergySlice());
+  // cutNamesEff.insert(cutNamesEff.begin(), "MaxShowerEnergySlice");
+  eShowerCutEff.insert(eShowerCutEff.begin(), kSliceNeutrinoMatched);
+  cutNamesEff.insert(cutNamesEff.begin(), "NeutrinoMatchedSlice");
 
   cutFlow<Cut> all("all", eShowerCuts, cutNames); // all events
   cutFlow<Cut> nue("nue", eShowerCuts, cutNames); // nue CC events
@@ -113,7 +168,8 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   cutFlow<Cut> nuePh("nuePh", eShowerCutEff, cutNamesEff); // nue CC events selecting only slice with max shower energy per spill (true photon only)
   cutFlow<Cut> nueOther("nueOther", eShowerCutEff, cutNamesEff); // nue CC events selecting only slice with max shower energy per spill (true other particle only)
 
-  Cut initialCut = kLargestShowerCut && kNotClearCosmic;
+  //Cut initialCut = kLargestShowerCut && kNotClearCosmic;
+  Cut initialCut = kNoCut;
 
   all.createNM1Cuts(initialCut);
   all.createSeqCuts(initialCut);
@@ -163,9 +219,6 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   nueCCOther.createNM1Cuts(initialCut && kNueCC && kOtherModeCut);
   nueCCOther.createSeqCuts(initialCut && kNueCC && kOtherModeCut);
 
-  nueEle.createNM1Cuts(initialCut && kNueCC && kIsTrueElectron);
-  nueEle.createSeqCuts(initialCut && kNueCC && kIsTrueElectron);
-
   nueMu.createNM1Cuts(initialCut && kNueCC && kIsTrueMuon);
   nueMu.createSeqCuts(initialCut && kNueCC && kIsTrueMuon);
 
@@ -184,8 +237,6 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   nueOther.createNM1Cuts(initialCut && kNueCC && kOtherTruthPDG);
   nueOther.createSeqCuts(initialCut && kNueCC && kOtherTruthPDG);
 
-  const Cut kGoodEle = kRFiducialCut && kLongestTrackLCut && kShwContainedCut && kLargestShowerCut && kShowerEnergy && kShowerDedx && kShowerConversionGap && kShowerDensity;
-
   // Spectrum
   ////######################################################/////
 
@@ -194,7 +245,7 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
                                       "rSubleadingShowerEnergy", "rShowerEResidual", "rSecondaryShowerEResidual", "rNeutrinoScore", "tShowerLength", "rShowerLenResidual", "rVertexResidual",
                                       "tShowerE", "tSubleadingShowerE", "kLongestTrackLengthResidual", "tTLongestTrackLength", "kShowerCosAngle", "kShowerP",
                                       "tFiducial", "rShowerLength", "rShowerEndX", "rShowerEndY", "rShowerEndZ", "rShowerStartX", "rShowerStartY", "rShowerStartZ",
-                                      "rVertexCryo", "rTruthPDGID", "rAllShowerEnergies"
+                                      "rVertexCryo", "rTruthPDGID", "rClearCosmic", "rLargestShowerCut", "tGoodNue"//, "rAllShowerEnergies"
                                       };
 
   std::vector<HistAxisVM> ax = {HistAxisVM("True E_{#nu} (GeV)", Binning::Simple(60,0.f,6.f),  kTruth_NeutrinoE),
@@ -233,20 +284,23 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
                               HistAxisVM("Reco Shower Start Z", Binning::Simple(200, -1000, 1000), kRShowerStartZ),
                               HistAxisVM("Cryostat Containing Vertex", Binning::Simple(2, 0, 2), kVertexCryo),
                               HistAxisVM("Truth PDG ID", Binning::Simple(6000, -3000, 3000), kTruthPDGID),
-                              HistAxisVM("All Shower Energies (GeV)", Binning::Simple(60,0.f,6.f),  kShowerE)
+                              HistAxisVM("Is Clear Cosmic", Binning::Simple(2, 0, 2), rClearCosmic),
+                              HistAxisVM("Largest Shower Passes Cut", Binning::Simple(2, 0, 2), rLargestShowerCut),
+                              HistAxisVM("Good #{nu}_{e}", Binning::Simple(2, 0, 2), tGoodNue),
+                              //HistAxisVM("All Shower Energies (GeV)", Binning::Simple(60,0.f,6.f),  kShowerE)
                               };
 
-  std::vector<std::string> truthVarLabels = {"Number of True #nu_e"};
-  std::vector<Binning> truthBins= {Binning::Simple(10, -5, 5)};
-  std::vector<TruthVar> truthVars = {kTGoodNue};
-  std::vector<std::string> truthVarNames = {"NumNuE"};
+  std::vector<std::string> truthVarLabels = {"Number of True #nu_e", "Number of True #nu_e", "Number of True #nu_{#mu}"};
+  std::vector<Binning> truthBins= {Binning::Simple(10, -5, 5), Binning::Simple(10, -5, 5), Binning::Simple(10, -5, 5)};
+  std::vector<TruthVar> truthVars = {kTGoodNue, kTnNue, kTnNumu};
+  std::vector<std::string> truthVarNames = {"NumNuE", "nNue", "nNumu"};
 
   std::vector<Var> treeVars = {kTruth_NeutrinoE, kLeadingShowerE, kLeadingShowerDedx, kLeadingShowerDensity, kLeadingShowerConversionGap,
                               kLongestTrack, kBaryDeltaZT, kBaryRadiusT, kRFiducial, kShwContained, kMuonChi2, kInteractionMode, kNeutrinoType, kSubLeadingShowerE,
                               kShowerEResidual, kSubleadingShowerEResidual, kNuScore, kTShowerLength, kShowerLenResidual, kVertexResidual,
                               kTShowerE, kTSubleadingShowerE, kTrackLenResidual, kTTrackLen, kLeadingShowerCosAngle, kLeadingShowerEleP,
                               kTFiducial, kRShowerLength, kRShowerEndX, kRShowerEndY, kRShowerEndZ, kRShowerStartX, kRShowerStartY, kRShowerStartZ,
-                              kVertexCryo, kTruthPDGID,
+                              kVertexCryo, kTruthPDGID, rClearCosmic, rLargestShowerCut, tGoodNue
                               };
 
   if ( useCVN ) {
@@ -272,91 +326,95 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
     );
   }  
 
-  treeMultiVars.emplace_back(kShowerE);
+  //treeMultiVars.emplace_back(kShowerE);
   //std::vector<std::string> treeVarNames = {"rAllShowerEnergies"};
 
   Cut treeCut = initialCut;
   for (auto& c : eShowerCuts) treeCut = treeCut && c;
 
-  const Tree t_sel ("t_sel", varNames, loader, treeMultiVars, kCRTPMT_correction, treeCut, kNoShift, true, true);
-  const Tree t_eff ("t_eff", varNames, loader, treeMultiVars, kCRTPMT_correction && kCacheMaxShowerSlice(), kIsMaxShowerEnergySlice(), kNoShift, true, true);
-  const Tree t_raw ("t_raw", varNames, loader, treeMultiVars, kCRTPMT_correction, kNoCut, kNoShift, true, true);
+  //SpillCut defaultSpillCut = kCRTPMT_correction;
+  SpillCut defaultSpillCut = kNoSpillCut;
+
+  const Tree t_sel ("t_sel", varNames, loader, treeMultiVars, defaultSpillCut, treeCut, kNoShift, true, true);
+  const Tree t_eff ("t_eff", varNames, loader, treeMultiVars, defaultSpillCut, kSliceNeutrinoMatched, kNoShift, true, true);
+  const Tree t_selEff ("t_selEff", varNames, loader, treeMultiVars, defaultSpillCut , kSliceNeutrinoMatched && treeCut, kNoShift, true, true);
+  const Tree t_raw ("t_raw", varNames, loader, treeMultiVars, defaultSpillCut, kNoCut, kNoShift, true, true);
+  const Tree t_evt ("t_evt", truthVarNames, loader, truthVars, defaultSpillCut, kNoTruthCut, kNoCut, kNoShift, true, true);
 
   // Add 2d histogram names after filling trees
   varNames.push_back("vertexCM");
   ax.push_back(HistAxisVM("Truth Vertex Contained", Binning::Simple(2, 0, 2), kTFiducial, "Reco Vertex Contained", Binning::Simple(2, 0, 2), kRFiducial));
 
-
   //eShower.createNM1Spectra(loader, axtnue);
-  all.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction);
-  all.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction);
+  all.createNM1Spectra(loader, ax, varNames, defaultSpillCut);
+  all.createSeqSpectra(loader, ax, varNames, defaultSpillCut);
 
-  nue.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction);
-  nue.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction);
+  nue.createNM1Spectra(loader, ax, varNames, defaultSpillCut);
+  nue.createSeqSpectra(loader, ax, varNames, defaultSpillCut);
 
-  numu.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction);
-  numu.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction);
+  numu.createNM1Spectra(loader, ax, varNames, defaultSpillCut);
+  numu.createSeqSpectra(loader, ax, varNames, defaultSpillCut);
 
-  nc.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction);
-  nc.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction);
+  nc.createNM1Spectra(loader, ax, varNames, defaultSpillCut);
+  nc.createSeqSpectra(loader, ax, varNames, defaultSpillCut);
 
-  cosmic.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction);
-  cosmic.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction);
+  cosmic.createNM1Spectra(loader, ax, varNames, defaultSpillCut);
+  cosmic.createSeqSpectra(loader, ax, varNames, defaultSpillCut);
 
   // kCacheMaxShowerSlice finds the slice ID with the max shower energy, only that slice is considered for the tNue spectra
-  nueEff.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueEff.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueEff.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueEff.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
 
-  nueP.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueP.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());  
+  nueP.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueP.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);  
 
-  nueA.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueA.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueA.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueA.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
 
   fid.createNM1Spectra(loader, truthVarLabels, truthBins, truthVars, truthVarNames, kTGoodNueCut, kNoSpillCut);
   fid.createSeqSpectra(loader, truthVarLabels, truthBins, truthVars, truthVarNames, kTGoodNueCut, kNoSpillCut);
 
-  nueCCQE.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueCCQE.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueCCQE.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueCCQE.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
 
-  nueCCRes.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueCCRes.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueCCRes.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueCCRes.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
 
-  nueCCDis.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueCCDis.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueCCDis.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueCCDis.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
   
-  nueCCCoh.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueCCCoh.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueCCCoh.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueCCCoh.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
   
-  nueCCMEC.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueCCMEC.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueCCMEC.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueCCMEC.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
   
-  nueNC.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueNC.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueNC.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
+  nueNC.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue);
   
-  nueCCOther.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueCCOther.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueCCOther.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nueCCOther.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nueEle.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueEle.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueEle.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nueEle.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nueMu.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueMu.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueMu.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nueMu.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nuePro.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nuePro.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nuePro.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nuePro.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nuePi0.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nuePi0.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nuePi0.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nuePi0.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nuePiC.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nuePiC.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nuePiC.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nuePiC.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nuePh.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nuePh.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nuePh.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nuePh.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
 
-  nueOther.createNM1Spectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
-  nueOther.createSeqSpectra(loader, ax, varNames, kCRTPMT_correction && kTruth_goodNue && kCacheMaxShowerSlice());
+  nueOther.createNM1Spectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
+  nueOther.createSeqSpectra(loader, ax, varNames, defaultSpillCut && kTruth_goodNue );
   
   /////////////////////////
   // actually make the spectra
@@ -623,6 +681,8 @@ void nuCCInclusive_MC(bool debug=false, std::string jobId="", std::string output
   t_sel.SaveTo(gDirectory->mkdir("t_sel"));
   t_eff.SaveTo(gDirectory->mkdir("t_eff"));
   t_raw.SaveTo(gDirectory->mkdir("t_raw"));
+  t_selEff.SaveTo(gDirectory->mkdir("t_selEff"));
+  t_evt.SaveTo(gDirectory->mkdir("t_evt"));
 
   // gDirectory->mkdir("recoCutflows");
   // gDirectory->cd("recoCutflows");
